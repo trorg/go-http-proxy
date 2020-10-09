@@ -25,11 +25,13 @@ func getDefaultUpstream() Upstream {
 
 func startBackends(done chan struct{}) {
     for _, server := range DefaultServers {
-        handler := http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
-            w.Header().Set("X-Proxied-Header", "1")
-            w.Header().Set("X-Server", server.Addr())
-            fmt.Fprintf(w, "hello")
-        })
+        handler := func (srv Server) http.Handler {
+            return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
+                w.Header().Set("X-Proxied-Header", "1")
+                w.Header().Set("X-Server", srv.Addr())
+                fmt.Fprintf(w, "hello")
+            })
+        }(server)
 
         srv := &http.Server{
             Addr: strings.Replace(server.Addr(), "http://", "", 1),
@@ -134,7 +136,7 @@ func TestProxy_GetHandler(t *testing.T) {
 
         header := resp.Header.Get("X-Server")
 
-        if header == "" {
+        if header != server.Addr() {
             t.Fatalf("X-Server is '%s'; want '%s'", header, server.Addr())
         }
 
