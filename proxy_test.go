@@ -5,85 +5,41 @@ import (
     "net/http"
     "fmt"
     "io/ioutil"
+    "strings"
 )
 
-var DefaultServerAddr string = "http://127.0.0.1:9001"
-var DefaultServerWeight int = 1
+var DefaultServers []Server = []Server{
+    NewServer("http://127.0.0.1:8080", 1),
+    NewServer("http://127.0.0.1:8081", 1),
+    NewServer("http://127.0.0.1:8082", 1),
+}
 
 func getDefaultUpstream() Upstream {
-    s := NewServer(DefaultServerAddr, DefaultServerWeight)
     u := NewUpstream()
-    u.AddServer(s)
+    for _, server := range DefaultServers {
+        u.AddServer(server)
+    }
+
     return u
 }
 
-func getDefaultBackendServer() *http.Server {
-    return &http.Server{
-        Addr: "127.0.0.1:9001",
-        Handler: http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
+func startBackends(done chan struct{}) {
+    for _, server := range DefaultServers {
+        handler := http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
             w.Header().Set("X-Proxied-Header", "1")
+            w.Header().Set("X-Server", server.Addr())
             fmt.Fprintf(w, "hello")
-        }),
-    }
-}
+        })
 
-func TestServer_New(t *testing.T) {
-    server := NewServer(DefaultServerAddr, DefaultServerWeight)
-    if server.Addr != DefaultServerAddr {
-        t.Errorf("Addr is '%s'; want '%s'", server.Addr, DefaultServerAddr)
-    }
-
-    if server.Weight != DefaultServerWeight {
-        t.Errorf("Weigh is %d; want %d", server.Weight, DefaultServerWeight)
-    }
-}
-
-func TestNewUpstream(t *testing.T) {
-    server := NewServer(DefaultServerAddr, DefaultServerWeight)
-    upstream := NewUpstream()
-    upstream.AddServer(server)
-}
-
-func TestUpstream_AddServer(t *testing.T) {
-    server := NewServer("1", 1)
-    upstream := NewUpstream()
-    upstream.AddServer(server)
-    upstream.AddServer(server)
-    upstream.AddServer(server)
-    servers := upstream.Servers()
-
-    if len(servers) != 1 {
-        t.Errorf("servers length is %d; want %d", len(servers), 1)
-    }
-}
-
-func TestUpstream_RemoveServer(t *testing.T) {
-    server1 := NewServer("1", 1)
-    server2 := NewServer("2", 1)
-    upstream := NewUpstream()
-    upstream.AddServer(server1)
-    upstream.AddServer(server2)
-    upstream.RemoveServer(server1)
-    upstream.RemoveServer(server1)
-    upstream.RemoveServer(server1)
-    servers := upstream.Servers()
-
-    if len(servers) != 1 {
-        t.Errorf("servers length is %d; want %d", len(servers), 1)
-    }
-}
-
-func TestUpstream_Servers(t *testing.T) {
-    server := NewServer("1", 1)
-    server2 := NewServer("2", 1)
-    upstream := NewUpstream()
-    upstream.AddServer(server)
-    upstream.AddServer(server)
-    upstream.AddServer(server2)
-    servers := upstream.Servers()
-
-    if len(servers) != 2 {
-        t.Errorf("servers length is %d; want %d", len(servers), 2)
+        srv := &http.Server{
+            Addr: strings.Replace(server.Addr(), "http://", "", 1),
+            Handler: handler,
+        }
+        go srv.ListenAndServe()
+        go func(srv *http.Server){
+            <-done
+            srv.Close()
+        }(srv)
     }
 }
 
@@ -111,7 +67,7 @@ func TestProxy_AddBeforeHandler(t *testing.T) {
 
     handlers := proxy.BeforeHandlers()
     if len(handlers) != 3 {
-        t.Errorf("registered handlers is %d; want %d", len(handlers), 3)
+        t.Fatalf("registered handlers is %d; want %d", len(handlers), 3)
     }
 }
 
@@ -130,11 +86,12 @@ func TestProxy_AddAfterHandler(t *testing.T) {
 
     handlers := proxy.AfterHandlers()
     if len(handlers) != 3 {
-        t.Errorf("registered handlers is %d; want %d", len(handlers), 3)
+        t.Fatalf("registered handlers is %d; want %d", len(handlers), 3)
     }
 }
 
 func TestProxy_GetHandler(t *testing.T) {
+    done := make(chan struct{})
     order := []string{}
     u := getDefaultUpstream()
     proxy := NewProxy(u)
@@ -156,39 +113,47 @@ func TestProxy_GetHandler(t *testing.T) {
         })
     })
 
-    backendServer := getDefaultBackendServer()
     server := &http.Server{
         Addr: "127.0.0.1:9000",
         Handler: proxy.GetHandler(),
     }
-    go backendServer.ListenAndServe()
     go server.ListenAndServe()
     defer server.Close()
-    defer backendServer.Close()
+    startBackends(done)
 
-    resp, err := http.Get("http://127.0.0.1:9000/")
-    if err != nil {
-        t.Error(err)
-    }
-    defer resp.Body.Close()
-    body, err := ioutil.ReadAll(resp.Body)
-    if err != nil {
-        t.Error(err)
-    }
+    for _, server := range DefaultServers {
+        resp, err := http.Get("http://127.0.0.1:9000/")
+        if err != nil {
+            t.Error(err)
+        }
+        defer resp.Body.Close()
+        body, err := ioutil.ReadAll(resp.Body)
+        if err != nil {
+            t.Error(err)
+        }
 
-    if resp.Header.Get("X-Proxied-Header") == "" {
-        t.Errorf("X-Proxied-Header is empty; want %s", "1")
-    }
+        header := resp.Header.Get("X-Server")
 
-    if string(body) != "hello" {
-        t.Error("Body not proxied")
-    }
+        if header == "" {
+            t.Fatalf("X-Server is '%s'; want '%s'", header, server.Addr())
+        }
 
-    if len(order) != 3 {
-        t.Error("Before handlers are not runned")
-    }
+        if resp.Header.Get("X-Proxied-Header") == "" {
+            t.Fatalf("X-Proxied-Header is empty; want %s", "1")
+        }
 
-    if order[0] != "first" || order[1] != "second" || order[2] != "last" {
-        t.Error("Before handlers order mismatch")
+        if string(body) != "hello" {
+            t.Fatal("Body not proxied")
+        }
+
+        if len(order) != 3 {
+            t.Fatal("Before handlers are not runned")
+        }
+
+        if order[0] != "first" || order[1] != "second" || order[2] != "last" {
+            t.Fatal("Before handlers order mismatch")
+        }
+        order = []string{}
     }
+    done <- struct{}{}
 }

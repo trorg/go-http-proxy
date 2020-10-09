@@ -6,51 +6,13 @@ import (
     "log"
     "io"
     "strings"
+    "errors"
 )
 
-// Server represents upstream server
-type Server struct {
-    Addr   string
-    Weight int
-}
-
-func NewServer(addr string, weight int) Server {
-    return Server{
-        Addr: addr,
-        Weight: weight,
-    }
-}
-
-func (s *Server) String() string {
-    return s.Addr
-}
-
-// A Upstream represents target servers where proxy can send requests
-type Upstream struct {
-    servers map[string]Server
-}
-
-func NewUpstream() Upstream {
-    return Upstream{
-        servers: make(map[string]Server),
-    }
-}
-
-func (u *Upstream) AddServer(server Server) {
-    u.servers[server.Addr] = server
-}
-
-func (u *Upstream) RemoveServer(server Server) {
-    delete(u.servers, server.Addr)
-}
-
-func (u *Upstream) Servers() (servers []Server) {
-    for _, s := range u.servers {
-        servers = append(servers, s)
-    }
-
-    return servers
-}
+var InternalServerError error = errors.New("internal server error")
+var GatewayTimeoutError error = errors.New("gateway timeout")
+var BadGatewayError error = errors.New("bad gateway")
+var ServiceUnavailableError error = errors.New("service unavailable")
 
 // Middleware handler, used to insert user defined actions 
 // before and after main request
@@ -91,7 +53,7 @@ func (p *Proxy) AfterHandlers() []ProxyHandler {
 // Generate http.Handler from middlewares and main 
 // proxy handler
 func (p *Proxy) GetHandler() http.Handler {
-    next := p.finalHandler()
+    next := finalHandler()
     for i := len(p.afterHandlers) - 1; i >= 0; i-- {
         next = p.afterHandlers[i](next) 
     }
@@ -114,48 +76,64 @@ func (p *Proxy) logf(format string, args ...interface{}) {
 // Main proxy handler
 func (p *Proxy) GetProxyHandler(next http.Handler) http.Handler {
     return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
-        served := false
-        for _, server := range p.upstream.Servers() {
-            url := fmt.Sprintf("%s/%s", server.Addr, r.RequestURI)
-            preq, err := http.NewRequestWithContext(r.Context(), r.Method, url, r.Body)
+        // @TODO:
+        // - Mark server online/offline
+        // - Select next server by Upstream.Next()
+        complete := false
+        for {
+            server, err := p.upstream.next()
             if err != nil {
-                p.logf("proxy: upstream request error [%s] : %s - %s", server.String(), r.RequestURI, err)
-                continue
+                p.logf("proxy: upstream [%s] : %v", server, err)
+                http.Error(w, "Service Unavailable", 503)
+                return
             }
-            copyHeaders(r.Header, preq.Header)
-            pres, err := http.DefaultClient.Do(preq)
+            err = proxyRequest(server, w, r)
             if err != nil {
-                p.logf("proxy: upstream read error [%s] : %s - %s", server.String(), r.RequestURI, err)
-                continue
+                p.logf("proxy: upstream [%s] : %v", server, err)
+            } else {
+                complete = true
+                break
             }
-            defer pres.Body.Close()
-            copyHeaders(pres.Header, w.Header())
-            w.WriteHeader(pres.StatusCode)
-            _, err = io.Copy(w, pres.Body)
-            if err != nil {
-                p.logf("proxy: upstream read error [%s] : %s - %s", server.String(), r.RequestURI, err)
-                continue
-            }
-            served := true
-            break
         }
 
-        if served {
+        if complete {
             next.ServeHTTP(w, r)
         }
     })
 }
 
-// Get empty final handler, without next argument
-func (p *Proxy) finalHandler() http.Handler {
+// Final empty handler
+func finalHandler() http.Handler {
     return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
     })
 }
 
-// Copy headers between responses
+// Copy headers between http.Header instances
 func copyHeaders(src, dst http.Header) {
     for k, v := range src {
         dst.Set(k, strings.Join(v, ","))
     }
 }
 
+// Proxy request to serveer
+func proxyRequest(server *Server, w http.ResponseWriter, r *http.Request) error {
+    url := fmt.Sprintf("%s/%s", server.String(), r.RequestURI)
+    preq, err := http.NewRequestWithContext(r.Context(), r.Method, url, r.Body)
+    if err != nil {
+        return fmt.Errorf("%v: %w", err, InternalServerError)
+    }
+    copyHeaders(r.Header, preq.Header)
+    pres, err := http.DefaultClient.Do(preq)
+    if err != nil {
+        return fmt.Errorf("%v: %w", err, GatewayTimeoutError)
+    }
+    defer pres.Body.Close()
+    copyHeaders(pres.Header, w.Header())
+    w.WriteHeader(pres.StatusCode)
+    _, err = io.Copy(w, pres.Body)
+    if err != nil {
+        return fmt.Errorf("%v: %w", err, BadGatewayError)
+    }
+
+    return nil
+}
