@@ -2,7 +2,6 @@ package proxy
 
 import (
     "testing"
-    "sync"
 )
 
 func TestServerStatus(t *testing.T) {
@@ -19,14 +18,6 @@ func TestServerStatus(t *testing.T) {
         }
     })
 
-    t.Run("setOnline", func (t *testing.T) {
-        status.setOnline(false)
-        online := status.Online()
-        if online {
-            t.Errorf("online is %t; want false", online)
-        }
-    })
-
     t.Run("Connections", func (t *testing.T) {
         status := ServerStatus{
             connections: 10,
@@ -37,40 +28,6 @@ func TestServerStatus(t *testing.T) {
         }
     })
 
-    t.Run("incrConnections", func (t *testing.T) {
-        var wg sync.WaitGroup
-        for i := 0; i < 50; i++ {
-            wg.Add(1)
-            go func() {
-                status.incrConnections()
-                wg.Done()
-            }()
-        }
-        wg.Wait()
-
-        c := status.Connections()
-        if c != 50 {
-            t.Errorf("connections is %dl want 50", c)
-        }
-    })
-
-    t.Run("decrConnections", func (t *testing.T) {
-        var wg sync.WaitGroup
-        for i := 0; i < 50; i++ {
-            wg.Add(1)
-            go func() {
-                status.decrConnections()
-                wg.Done()
-            }()
-        }
-        wg.Wait()
-
-        c := status.Connections()
-        if c != 0 {
-            t.Errorf("connections is %dl want 0", c)
-        }
-    })
-
     t.Run("Errors", func (t *testing.T) {
         status := ServerStatus{
             errors: 10,
@@ -78,40 +35,6 @@ func TestServerStatus(t *testing.T) {
         c := status.Errors()
         if c != 10 {
             t.Errorf("errors is %d; want 10", c)
-        }
-    })
-
-    t.Run("incrErrors", func (t *testing.T) {
-        var wg sync.WaitGroup
-        for i := 0; i < 50; i++ {
-            wg.Add(1)
-            go func() {
-                status.incrErrors()
-                wg.Done()
-            }()
-        }
-        wg.Wait()
-
-        c := status.Errors()
-        if c != 50 {
-            t.Errorf("errors is %dl want 50", c)
-        }
-    })
-
-    t.Run("decrErrors", func (t *testing.T) {
-        var wg sync.WaitGroup
-        for i := 0; i < 50; i++ {
-            wg.Add(1)
-            go func() {
-                status.decrErrors()
-                wg.Done()
-            }()
-        }
-        wg.Wait()
-
-        c := status.Errors()
-        if c != 0 {
-            t.Errorf("errors is %dl want 0", c)
         }
     })
 }

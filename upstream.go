@@ -14,6 +14,11 @@ const (
 )
 
 type ServerStatus struct {
+
+    // Weight counter, each request server by server increase this counter.
+    // When it reaches server's weight, it should be reset
+    wc          uint8
+
     mux         sync.Mutex
     errors      uint
     online      bool
@@ -26,28 +31,10 @@ func (s *ServerStatus) Online() bool {
     return s.online
 }
 
-func (s *ServerStatus) setOnline(status bool) {
-    s.mux.Lock()
-    defer s.mux.Unlock()
-    s.online = status
-}
-
 func (s *ServerStatus) Connections() uint {
     s.mux.Lock()
     defer s.mux.Unlock()
     return s.connections
-}
-
-func (s *ServerStatus) incrConnections() {
-    s.mux.Lock()
-    defer s.mux.Unlock()
-    s.connections += 1
-}
-
-func (s *ServerStatus) decrConnections() {
-    s.mux.Lock()
-    defer s.mux.Unlock()
-    s.connections -= 1
 }
 
 func (s *ServerStatus) Errors() uint {
@@ -56,27 +43,21 @@ func (s *ServerStatus) Errors() uint {
     return s.errors
 }
 
-func (s *ServerStatus) incrErrors() {
-    s.mux.Lock()
-    defer s.mux.Unlock()
-    s.errors += 1
-}
-
-func (s *ServerStatus) decrErrors() {
-    s.mux.Lock()
-    defer s.mux.Unlock()
-    s.errors -= 1
-}
-
 // Upstream server representation
 type Server struct {
     mux     sync.Mutex
     addr    string
+
+    // Server weight, minimum is 1, maximum 254
+    // if 0 or 255 is passed, weight will be set to 1
     weight  uint8
     status  *ServerStatus
 }
 
 func NewServer(addr string, weight uint8) Server {
+    if weight == 0 || weight == 255 {
+        weight = 1
+    }
     return Server{
         addr: addr,
         weight: weight,
@@ -194,14 +175,28 @@ func (u *Upstream) next() (*Server, error) {
     u.mux.Lock()
     defer u.mux.Unlock()
 
+    // RoundRobin
     next := u.ring
     for i := 0; i < u.ring.Len(); i++ {
         srv, ok := next.Value.(*Server)
-        if ok && srv != nil && srv.Status().Online() {
-            u.ring = next.Next()
-            return srv, nil
+        if ok  {
+            status := srv.Status()
+            status.mux.Lock()
+            //srv.mux.Lock()
+            if srv != nil && status.online {
+                counter := status.wc + 1
+                if counter == 0 || counter + 1 >= srv.weight {
+                    u.ring = next.Next()
+                    status.wc = 0
+                } else {
+                    status.wc += 1
+                }
+                status.mux.Unlock()
+                //srv.mux.Unlock()
+                return srv, nil
+            }
+            next = next.Next()
         }
-        next = next.Next()
     }
 
     return nil, errors.New("no valid servers")
