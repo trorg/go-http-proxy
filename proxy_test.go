@@ -15,11 +15,8 @@ var DefaultServers []Server = []Server{
 }
 
 func getDefaultUpstream() Upstream {
-    u := NewUpstream()
-    for _, server := range DefaultServers {
-        u.AddServer(server)
-    }
-
+    strategy := StrategyRoundRobin{}
+    u := NewUpstream(DefaultServers, &strategy)
     return u
 }
 

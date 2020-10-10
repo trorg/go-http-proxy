@@ -87,7 +87,9 @@ func (p *Proxy) GetProxyHandler(next http.Handler) http.Handler {
                 http.Error(w, "Service Unavailable", 503)
                 return
             }
+            server.status.incrConnections()
             err = proxyRequest(server, w, r)
+            server.status.decrConnections()
             if err != nil {
                 p.logf("proxy: upstream [%s] : %v", server, err)
             } else {

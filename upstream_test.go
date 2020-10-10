@@ -79,57 +79,11 @@ func TestServer(t *testing.T) {
 func TestUpstream(t *testing.T) {
     server1 := NewServer("http://127.0.0.1:8080", 1)
     server2 := NewServer("http://127.0.0.1:8081", 1)
-    upstream := NewUpstream()
-
-    t.Run("Strategy", func (t *testing.T) {
-        s := upstream.Strategy()
-        if s != UpstreamStrategyRoundRobin {
-            t.Errorf("strategy is %d; want %d", s, UpstreamStrategyRoundRobin)
-        }
-    })
-
-    t.Run("SetStrategy", func (t *testing.T) {
-        s := upstream.SetStrategy(UpstreamStrategyLeastConn).Strategy()
-        if s != UpstreamStrategyLeastConn {
-            t.Errorf("strategy is %d; want %d", s, UpstreamStrategyLeastConn)
-        }
-    })
-
-    t.Run("AddServer", func (t *testing.T) {
-        upstream.AddServer(server1)
-        servers := upstream.Servers()
-        if len(servers) != 1 {
-            t.Errorf("servers length is %d; want %d", len(servers), 1)
-        }
-
-        upstream.AddServer(server2)
-        servers = upstream.Servers()
-        if len(servers) != 2 {
-            t.Errorf("servers length is %d; want %d", len(servers), 2)
-        }
-    })
-
-    t.Run("RemoveServer", func (t *testing.T) {
-        upstream.RemoveServer(server1)
-        servers := upstream.Servers()
-        if len(servers) != 1 {
-            t.Errorf("servers length is %d; want %d", len(servers), 1)
-        }
-        upstream.RemoveServer(server2)
-        servers = upstream.Servers()
-        if len(servers) != 0 {
-            t.Errorf("servers length is %d; want %d", len(servers), 0)
-        }
-    })
+    strategy := StrategyRoundRobin{}
+    upstream := NewUpstream([]Server{server1, server2}, &strategy)
 
     t.Run("Servers", func (t *testing.T) {
-        upstream.AddServer(server1)
         servers := upstream.Servers()
-        if len(servers) != 1 {
-            t.Errorf("servers length is %d; want %d", len(servers), 1)
-        }
-        upstream.AddServer(server2)
-        servers = upstream.Servers()
         if len(servers) != 2 {
             t.Errorf("servers length is %d; want %d", len(servers), 2)
         }
@@ -139,7 +93,6 @@ func TestUpstream(t *testing.T) {
     // there are two servers in upstream, they was added in prev test
     t.Run("next", func (t *testing.T) {
         t.Run("RoundRobin", func(t *testing.T) {
-            upstream.SetStrategy(UpstreamStrategyRoundRobin)
             for _, srv := range upstream.Servers() {
                 next, err := upstream.next()
                 if err != nil {
