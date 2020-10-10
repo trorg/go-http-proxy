@@ -12,10 +12,16 @@ Simple HTTP proxy
         "log"
     )
 
-    server := proxy.NewServer("http://127.0.0.1:8080", 1)
-    upstream := proxy.NewUpstream()
-    upstream.AddServer(server)
-
+    servers := []proxy.Server{
+        proxy.NewServer("http://127.0.0.1:8000", 1),
+        proxy.NewServer("http://127.0.0.1:8001", 1),
+    }
+    // NewUpstream signature is (servers []Server, strategy UpstreamStrategy).
+    // UpstreamStrategy is interface and StrategyRoundRobin realise it,
+    // but its receiver is pointer and we should pass new structure as reference.
+    // var strategy UpstreamStrategy
+    // strategy = &proxy.StrategyRoundRobin{}
+    upstream := proxy.NewUpstream(servers, &proxy.StrategyRoundRobin{})
     proxy := proxy.NewProxy(upstream)
 
     // Add before middleware
@@ -47,7 +53,7 @@ Simple HTTP proxy
     })
 
     server := &http.Server{
-        Addr: "127.0.0.1:8000",
+        Addr: "127.0.0.1:9000",
         Handler: proxy.GetHandler(),
     }
 
