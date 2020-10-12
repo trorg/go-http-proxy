@@ -3,12 +3,13 @@ package proxy
 import (
     "testing"
     "fmt"
+    "net/http"
 )
 
-var servers []Server = []Server{
-    NewServer("http://127.0.0.1:8000", 1),
-    NewServer("http://127.0.0.1:8001", 1),
-    NewServer("http://127.0.0.1:8002", 1),
+var servers []*UpstreamServer = []*UpstreamServer{
+    NewUpstreamServer("http://127.0.0.1:8000", 1),
+    NewUpstreamServer("http://127.0.0.1:8001", 1),
+    NewUpstreamServer("http://127.0.0.1:8002", 1),
 }
 
 func TestStrategyRoundRobin_SetServers(t *testing.T) {
@@ -17,13 +18,13 @@ func TestStrategyRoundRobin_SetServers(t *testing.T) {
 
     r := strategy.ring
     for i := 0; i < r.Len(); i++ {
-        srv := r.Value.(*Server)
-        if srv.Addr() != servers[i].Addr() {
-            t.Errorf("Server addr is '%s'; want '%s'", srv.Addr(), servers[i].Addr())
+        srv := r.Value.(*UpstreamServer)
+        if srv.String() != servers[i].String() {
+            t.Errorf("Server addr is '%s'; want '%s'", srv.String(), servers[i].String())
         }
 
         p1 := srv
-        p2 := &servers[i]
+        p2 := servers[i]
         if fmt.Sprintf("%p", p1) != fmt.Sprintf("%p", p2) {
             t.Errorf("Server ptr is '%p'; want '%p'", p1, p2)
         }
@@ -34,16 +35,17 @@ func TestStrategyRoundRobin_SetServers(t *testing.T) {
 func TestStrategyRoundRobin_Next(t *testing.T) {
     strategy := StrategyRoundRobin{}
     strategy.SetServers(servers)
+    r, _ := http.NewRequest("GET", "http://127.0.0.1", nil)
 
     t.Run("Simple", func (t *testing.T) {
         for _, server := range servers {
-            next, err := strategy.Next()
+            next, err := strategy.Next(r)
             if err != nil {
                 t.Error(err)
             }
 
-            if server.Addr() != next.Addr() {
-                t.Errorf("server addr is '%s'; want '%s'", server.Addr(), next.Addr())
+            if server.String() != next.String() {
+                t.Errorf("server addr is '%s'; want '%s'", server.String(), next.String())
             }
         }
     })
@@ -56,12 +58,12 @@ func TestStrategyRoundRobin_Next(t *testing.T) {
 
         run := func (iter, cnt int) {
             for i := 1; i <= cnt; i++ {
-                next, err := strategy.Next()
+                next, err := strategy.Next(r)
                 if err != nil {
                     t.Error(err)
                 }
-                if next.Addr() != servers[iter-1].Addr() {
-                    t.Errorf("%d] Server is '%s'; want '%s'", i, next.Addr(), servers[iter-1].Addr())
+                if next.String() != servers[iter-1].String() {
+                    t.Errorf("%d] Server is '%s'; want '%s'", i, next.String(), servers[iter-1].String())
                 }
             }
         }
@@ -76,16 +78,16 @@ func TestStrategyRoundRobin_Next(t *testing.T) {
         servers[0].weight = 1
         servers[1].weight = 1
         servers[2].weight = 1
-        servers[0].status.online = false
+        servers[0].online = false
 
-        next, err := strategy.Next()
+        next, err := strategy.Next(r)
         if err != nil {
             t.Error(err)
         }
-        if next.Addr() != servers[1].Addr() {
-            t.Errorf("Server is '%s'; want '%s'", next.Addr(), servers[1].Addr())
+        if next.String() != servers[1].String() {
+            t.Errorf("Server is '%s'; want '%s'", next.String(), servers[1].String())
         }
-        servers[0].status.online = true
+        servers[0].online = true
     })
 }
 
@@ -94,13 +96,13 @@ func TestStrategyLeastConn_SetServers(t *testing.T) {
     strategy.SetServers(servers)
 
     for i := 0; i < len(strategy.servers); i++ {
-        srv := &strategy.servers[i]
-        if srv.Addr() != servers[i].Addr() {
-            t.Errorf("Server addr is '%s'; want '%s'", srv.Addr(), servers[i].Addr())
+        srv := strategy.servers[i]
+        if srv.String() != servers[i].String() {
+            t.Errorf("Server addr is '%s'; want '%s'", srv.String(), servers[i].String())
         }
 
         p1 := srv
-        p2 := &servers[i]
+        p2 := servers[i]
         if fmt.Sprintf("%p", p1) != fmt.Sprintf("%p", p2) {
             t.Errorf("Server ptr is '%p'; want '%p'", p1, p2)
         }
@@ -111,18 +113,70 @@ func TestStrategyLeastConn_Next(t *testing.T) {
     strategy := StrategyLeastConn{}
     strategy.SetServers(servers)
 
+    r, _ := http.NewRequest("GET", "http://127.0.0.1", nil)
     t.Run("Simple", func (t *testing.T) {
         for _, server := range servers {
-            next, err := strategy.Next()
+            next, err := strategy.Next(r)
             if err != nil {
                 t.Error(err)
                 return
             }
 
-            if next.Addr() != server.Addr() {
-                t.Errorf("server is '%s'; want '%s'", next.Addr(), server.Addr())
+            if next.String() != server.String() {
+                t.Errorf("server is '%s'; want '%s'", next.String(), server.String())
             }
-            next.status.connections += 1
+            next.connections += 1
+        }
+    })
+}
+
+func TestStrategyConsistentHashing(t *testing.T) {
+    strategy := StrategyConsistentHashing{
+        GetKey: func (r *http.Request) (string, error) {
+            return r.RequestURI, nil
+        },
+    }
+    strategy.SetServers(servers)
+
+    t.Run("SetServers", func (t *testing.T) {
+        points := len(servers)*int(strategy.KetamaPoints)
+        if len(strategy.points) != points {
+            t.Errorf("generated points is '%d'; want '%d'", len(strategy.points), points)
+        }
+    })
+
+    t.Run("getServers", func (t *testing.T) {
+        wantServers := uint(2)
+        servers := strategy.getServers("zzzztestkey", wantServers)
+
+        if len(servers) != 2 {
+            t.Errorf("servers length is %d; want %d", len(servers), wantServers)
+        }
+
+        if servers[0] == servers[1] {
+            t.Errorf("Servers are not different.")
+        }
+    })
+
+    t.Run("Next", func (t *testing.T) {
+        r1, err  := http.NewRequest("GET", "http://127.0.0.1/a/b", nil)
+        r2, err  := http.NewRequest("GET", "http://127.0.0.1/z/e", nil)
+        if err != nil {
+            t.Error(err)
+        }
+
+        reqs := []*http.Request{r1, r2}
+
+        for _, r := range reqs {
+            s1, err := strategy.Next(r)
+            s2, err := strategy.Next(r)
+            if err != nil {
+                t.Errorf("no next server: %w", err)
+            }
+
+            if s1 != s2 {
+                t.Errorf("Servers are different")
+            }
         }
     })
 }

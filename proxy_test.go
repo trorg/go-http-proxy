@@ -5,16 +5,15 @@ import (
     "net/http"
     "fmt"
     "io/ioutil"
-    "strings"
 )
 
-var DefaultServers []Server = []Server{
-    NewServer("http://127.0.0.1:8080", 1),
-    NewServer("http://127.0.0.1:8081", 1),
-    NewServer("http://127.0.0.1:8082", 1),
+var DefaultServers []*UpstreamServer = []*UpstreamServer{
+    NewUpstreamServer("http://127.0.0.1:8080", 1),
+    NewUpstreamServer("http://127.0.0.1:8081", 1),
+    NewUpstreamServer("http://127.0.0.1:8082", 1),
 }
 
-func getDefaultUpstream() Upstream {
+func getDefaultUpstream() *Upstream {
     strategy := StrategyRoundRobin{}
     u := NewUpstream(DefaultServers, &strategy)
     return u
@@ -22,16 +21,16 @@ func getDefaultUpstream() Upstream {
 
 func startBackends(done chan struct{}) {
     for _, server := range DefaultServers {
-        handler := func (srv Server) http.Handler {
+        handler := func (srv *UpstreamServer) http.Handler {
             return http.HandlerFunc(func (w http.ResponseWriter, r *http.Request) {
                 w.Header().Set("X-Proxied-Header", "1")
-                w.Header().Set("X-Server", srv.Addr())
+                w.Header().Set("X-Server", srv.String())
                 fmt.Fprintf(w, "hello")
             })
         }(server)
 
         srv := &http.Server{
-            Addr: strings.Replace(server.Addr(), "http://", "", 1),
+            Addr: fmt.Sprintf("%s:%d", server.Host(), server.Port()),
             Handler: handler,
         }
         go srv.ListenAndServe()
@@ -133,8 +132,8 @@ func TestProxy_GetHandler(t *testing.T) {
 
         header := resp.Header.Get("X-Server")
 
-        if header != server.Addr() {
-            t.Fatalf("X-Server is '%s'; want '%s'", header, server.Addr())
+        if header != server.String() {
+            t.Fatalf("X-Server is '%s'; want '%s'", header, server.String())
         }
 
         if resp.Header.Get("X-Proxied-Header") == "" {

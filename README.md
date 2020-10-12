@@ -12,11 +12,11 @@ Simple HTTP proxy
         "log"
     )
 
-    servers := []proxy.Server{
-        proxy.NewServer("http://127.0.0.1:8000", 1),
-        proxy.NewServer("http://127.0.0.1:8001", 1),
+    servers := []*proxy.UpstreamServer{
+        proxy.NewUpstreamServer("http://127.0.0.1:8000", 1),
+        proxy.NewUpstreamServer("http://127.0.0.1:8001", 1),
     }
-    // NewUpstream signature is (servers []Server, strategy UpstreamStrategy).
+    // NewUpstream signature is (servers []*UpstreamServer, strategy UpstreamStrategy).
     // UpstreamStrategy is interface and StrategyRoundRobin realise it,
     // but its receiver is pointer and we should pass new structure as reference.
     // var strategy UpstreamStrategy
