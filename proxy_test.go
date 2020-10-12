@@ -5,6 +5,7 @@ import (
     "net/http"
     "fmt"
     "io/ioutil"
+    "time"
 )
 
 var DefaultServers []*UpstreamServer = []*UpstreamServer{
@@ -119,6 +120,7 @@ func TestProxy_GetHandler(t *testing.T) {
     defer server.Close()
     startBackends(done)
 
+    time.Sleep(time.Millisecond * 100)
     for _, server := range DefaultServers {
         resp, err := http.Get("http://127.0.0.1:9000/")
         if err != nil {

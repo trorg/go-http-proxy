@@ -164,9 +164,9 @@ func (s *StrategyConsistentHashing) SetServers(servers []*UpstreamServer) {
         var phash, hash uint32
 
         srv := servers[i]
-        n := int(uint(srv.weight) * s.KetamaPoints)
+        n := uint(srv.weight) * s.KetamaPoints
 
-        for i := 0; i < n; i++ {
+        for i := uint(0); i < n; i++ {
             hash = crc32.ChecksumIEEE([]byte(fmt.Sprintf("%s\\0%d%d", srv.Host(), srv.Port(), phash)))
             s.points = append(s.points, KetamaPoint{hash, srv})
             phash = hash
@@ -210,7 +210,7 @@ func (s *StrategyConsistentHashing) findPoint(key string) int {
 func (s *StrategyConsistentHashing) getServers(key string, count uint) []*UpstreamServer {
     servers := make([]*UpstreamServer, 0)
     point := s.findPoint(key)
-    for i := 0; i < int(count); i++ {
+    for i := uint(0); i < count; i++ {
         k := point % len(s.points)
         servers = append(servers, s.points[k].server)
         point++
